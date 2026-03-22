@@ -1,0 +1,1 @@
+-- schema.sql - Database schema for RAG recommendation system
