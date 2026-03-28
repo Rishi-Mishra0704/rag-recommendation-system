@@ -2,3 +2,4 @@
 .venv
 __pycache__/
 *eval_results*
+*.csv
