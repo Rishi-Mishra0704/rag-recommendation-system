@@ -4,15 +4,10 @@ import argparse
 import json
 import random
 import sys
-import time
 from pathlib import Path
 from uuid import uuid4
 
 import pandas as pd
-import requests
-
-# Allow running from repo root or from this file's directory
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from recommendation.data_gen.schemas import (
     CERTIFICATES,
@@ -25,174 +20,8 @@ from recommendation.data_gen.schemas import (
     Role,
     TradeType,
 )
-
-# ---------------------------------------------------------------------------
-# Tag map: deterministic tags per industry
-# ---------------------------------------------------------------------------
-INDUSTRY_TAGS: dict[Industry, list[str]] = {
-    Industry.AGRICULTURE: ["agriculture", "farming", "crop", "agri-trade", "harvest", "organic"],
-    Industry.AUTOMOTIVE: ["automotive", "spare-parts", "vehicles", "oem", "aftermarket", "fleet"],
-    Industry.CHEMICALS: ["chemicals", "industrial", "specialty-chemicals", "b2b", "raw-materials", "processing"],
-    Industry.CONSTRUCTION: ["construction", "building", "infrastructure", "materials", "contractor", "civil"],
-    Industry.ELECTRONICS: ["electronics", "telecom", "components", "hardware", "pcb", "semiconductors"],
-    Industry.ENERGY: ["energy", "oil-gas", "renewables", "power", "solar", "utilities"],
-    Industry.FOOD_BEVERAGE: ["food", "beverages", "fmcg", "packaged-goods", "supply-chain", "ingredients"],
-    Industry.HEALTHCARE: ["healthcare", "medical", "devices", "diagnostics", "hospital", "wellness"],
-    Industry.LOGISTICS: ["logistics", "freight", "supply-chain", "shipping", "warehousing", "trade"],
-    Industry.MANUFACTURING: ["manufacturing", "factory", "production", "industrial", "oem", "b2b"],
-    Industry.METALS_MINING: ["metals", "mining", "steel", "aluminum", "raw-materials", "commodities"],
-    Industry.PHARMACEUTICALS: ["pharma", "drugs", "biologics", "api", "nutraceuticals", "biotech"],
-    Industry.RETAIL: ["retail", "wholesale", "distribution", "fmcg", "consumer-goods", "e-commerce"],
-    Industry.TEXTILE_APPAREL: ["textiles", "apparel", "fabric", "garments", "fashion", "yarn"],
-    Industry.TECHNOLOGY: ["technology", "software", "saas", "it-services", "digital", "cloud"],
-    Industry.WOOD_FURNITURE: ["wood", "furniture", "timber", "panels", "flooring", "interior"],
-}
-
-# ---------------------------------------------------------------------------
-# Country → trade regions mapping
-# ---------------------------------------------------------------------------
-COUNTRY_REGION_MAP: dict[str, list[str]] = {
-    "united states": ["North America"],
-    "canada": ["North America"],
-    "mexico": ["North America", "South America"],
-    "brazil": ["South America"],
-    "argentina": ["South America"],
-    "colombia": ["South America"],
-    "chile": ["South America"],
-    "united kingdom": ["Western Europe"],
-    "germany": ["Western Europe"],
-    "france": ["Western Europe"],
-    "italy": ["Western Europe"],
-    "spain": ["Western Europe"],
-    "netherlands": ["Western Europe"],
-    "sweden": ["Western Europe"],
-    "norway": ["Western Europe"],
-    "denmark": ["Western Europe"],
-    "switzerland": ["Western Europe"],
-    "austria": ["Western Europe"],
-    "belgium": ["Western Europe"],
-    "portugal": ["Western Europe"],
-    "poland": ["Eastern Europe"],
-    "ukraine": ["Eastern Europe"],
-    "czech republic": ["Eastern Europe"],
-    "romania": ["Eastern Europe"],
-    "hungary": ["Eastern Europe"],
-    "russia": ["Eastern Europe", "Central Asia"],
-    "turkey": ["Middle East", "Western Europe"],
-    "saudi arabia": ["Middle East"],
-    "united arab emirates": ["Middle East"],
-    "israel": ["Middle East"],
-    "iran": ["Middle East"],
-    "iraq": ["Middle East"],
-    "egypt": ["Middle East", "Africa"],
-    "south africa": ["Africa"],
-    "nigeria": ["Africa"],
-    "kenya": ["Africa"],
-    "ghana": ["Africa"],
-    "ethiopia": ["Africa"],
-    "india": ["South Asia", "India"],
-    "pakistan": ["South Asia"],
-    "bangladesh": ["South Asia"],
-    "sri lanka": ["South Asia"],
-    "indonesia": ["Southeast Asia"],
-    "malaysia": ["Southeast Asia"],
-    "thailand": ["Southeast Asia"],
-    "vietnam": ["Southeast Asia"],
-    "philippines": ["Southeast Asia"],
-    "singapore": ["Southeast Asia"],
-    "china": ["East Asia"],
-    "japan": ["East Asia"],
-    "south korea": ["East Asia"],
-    "taiwan": ["East Asia"],
-    "hong kong": ["East Asia"],
-    "australia": ["Oceania"],
-    "new zealand": ["Oceania"],
-    "kazakhstan": ["Central Asia"],
-    "uzbekistan": ["Central Asia"],
-}
-
-
-def country_to_regions(country: str) -> list[str]:
-    key = country.strip().lower()
-    return COUNTRY_REGION_MAP.get(key, ["Global"])
-
-
-# ---------------------------------------------------------------------------
-# Ollama LLM generation
-# ---------------------------------------------------------------------------
-OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "llama3.1:8b"
-
-
-def _build_prompt(biz: dict) -> str:
-    return (
-        f"You are writing a B2B company profile for a trade platform.\n\n"
-        f"Company: {biz['name']}\n"
-        f"Industry: {biz['industry']} > {biz['sub_industry']}\n"
-        f"Category: {biz['category']}\n"
-        f"Location: {biz['location']}\n"
-        f"Roles: {', '.join(biz['roles'])}\n"
-        f"Tags: {', '.join(biz['tags'])}\n\n"
-        f"Write exactly two sections:\n"
-        f"DESCRIPTION: A 2-3 sentence factual description of the company's business and products.\n"
-        f"PARTNER_GOALS: A 2-3 sentence statement of what kind of B2B partners this company is seeking.\n\n"
-        f"Use plain text, no markdown, no bullet points."
-    )
-
-
-def _call_ollama(prompt: str) -> str | None:
-    try:
-        resp = requests.post(
-            OLLAMA_URL,
-            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
-            timeout=60,
-        )
-        resp.raise_for_status()
-        return resp.json().get("response", "").strip()
-    except Exception:
-        return None
-
-
-def _parse_llm_response(text: str) -> tuple[str, str]:
-    description, partner_goals = "", ""
-    for line in text.splitlines():
-        if line.upper().startswith("DESCRIPTION:"):
-            description = line.split(":", 1)[1].strip()
-        elif line.upper().startswith("PARTNER_GOALS:"):
-            partner_goals = line.split(":", 1)[1].strip()
-    # Fallback: split on the keyword if single-line response
-    if not description and "PARTNER_GOALS:" in text.upper():
-        idx = text.upper().index("PARTNER_GOALS:")
-        description = text[:idx].replace("DESCRIPTION:", "").strip()
-        partner_goals = text[idx:].split(":", 1)[1].strip()
-    return description, partner_goals
-
-
-def _fallback_texts(biz: dict) -> tuple[str, str]:
-    description = (
-        f"{biz['name']} is a {biz['category']} operating in the {biz['sub_industry']} "
-        f"segment of the {biz['industry']} industry, based in {biz['location']}. "
-        f"The company focuses on delivering quality products and services to B2B clients worldwide."
-    )
-    partner_goals = (
-        f"{biz['name']} is looking for reliable {', '.join(biz['roles'])} partners "
-        f"in the {biz['industry']} space. "
-        f"We seek long-term trade relationships with companies that share our commitment to quality and efficiency."
-    )
-    return description, partner_goals
-
-
-def generate_texts(biz: dict, retries: int = 3) -> tuple[str, str]:
-    prompt = _build_prompt(biz)
-    for attempt in range(retries):
-        raw = _call_ollama(prompt)
-        if raw:
-            desc, goals = _parse_llm_response(raw)
-            if desc and goals:
-                return desc, goals
-        if attempt < retries - 1:
-            time.sleep(1)
-    return _fallback_texts(biz)
+from recommendation.data_gen.mappings import INDUSTRY_TAGS, country_to_regions
+from recommendation.data_gen.llm_gen import generate_texts
 
 
 # ---------------------------------------------------------------------------

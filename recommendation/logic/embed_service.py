@@ -3,24 +3,22 @@ embed_service.py — Generate embeddings for every business profile and insert
 them into the businesses table.
 
 Usage:
-    python embed_service.py
+    python -m recommendation.logic.embed_service
 """
 
 import json
-import os
 import sys
 from pathlib import Path
 import time
-import psycopg2
-import requests
-from pgvector.psycopg2 import register_vector
-from constants.constants import OLLAMA_EMBED_URL, EMBED_MODEL, DB_CONFIG, INSERT_SQL
+
+from recommendation.constants.constants import INSERT_SQL
+from recommendation.common import connect_db, get_embedding
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
 PROFILES_PATH = Path(__file__).resolve().parents[2] / "data" / "profiles.json"
-
 
 
 # ---------------------------------------------------------------------------
@@ -47,24 +45,6 @@ def build_text_block(profile: dict) -> str:
         f"Partner goals: {profile.get('partner_goals', '')}",
     ]
     return "\n".join(p for p in parts if p)
-
-
-def get_embedding(text: str) -> list[float]:
-    response = requests.post(
-        OLLAMA_EMBED_URL,
-        json={"model": EMBED_MODEL, "input": text},
-        timeout=60,
-    )
-    response.raise_for_status()
-    data = response.json()
-    # Ollama /api/embed returns {"embeddings": [[...]], ...}
-    return data["embeddings"][0]
-
-
-def connect_db() -> psycopg2.extensions.connection:
-    conn = psycopg2.connect(**DB_CONFIG)
-    register_vector(conn)
-    return conn
 
 
 def insert_business(cursor, profile: dict, embedding: list[float]) -> None:
@@ -126,7 +106,6 @@ def main() -> None:
 
     total_time = time.time() - start
     print(f"\nDone — {total} businesses embedded and inserted in {total_time:.1f}s.")
-
 
 
 if __name__ == "__main__":
