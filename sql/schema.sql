@@ -26,16 +26,17 @@ CREATE TABLE IF NOT EXISTS businesses (
     tags              TEXT[]      NOT NULL DEFAULT '{}',
     description       TEXT        NOT NULL,
     partner_goals     TEXT        NOT NULL,
-    profile_embedding VECTOR(1024)
+    profile_embedding VECTOR(4096) NOT NULL
+    search_text       TSVECTOR     GENERATED ALWAYS AS (
+                        to_tsvector('english', coalesce(name, '') || ' ' || coalesce(industry, '') || ' ' || coalesce(sub_industry, '') || ' ' ||
+                                    array_to_string(roles, ' ') || ' ' || coalesce(category, '') || ' ' || coalesce(trade_type, '') || ' ' ||
+                                    coalesce(location, '') || ' ' || array_to_string(trade_regions, ' ') || ' ' ||
+                                    coalesce(capacity, '') || ' ' || array_to_string(certificates, ' ') || ' ' ||
+                                    array_to_string(tags, ' ') || ' ' || coalesce(description, '') || ' ' ||
+                                    coalesce(partner_goals, '')
+                        )
+                    ) STORED
 );
-
--- ---------------------------------------------------------------------------
--- Vector index (HNSW, cosine distance)
--- ---------------------------------------------------------------------------
-CREATE INDEX IF NOT EXISTS idx_businesses_embedding
-    ON businesses
-    USING hnsw (profile_embedding vector_cosine_ops)
-    WITH (m = 16, ef_construction = 200);
 
 -- ---------------------------------------------------------------------------
 -- GIN indexes (array containment / overlap queries)
@@ -51,6 +52,9 @@ CREATE INDEX IF NOT EXISTS idx_businesses_trade_regions
 
 CREATE INDEX IF NOT EXISTS idx_businesses_certificates
     ON businesses USING gin (certificates);
+
+CREATE INDEX IF NOT EXISTS idx_businesses_search_text
+    ON businesses USING gin (search_text);
 
 -- ---------------------------------------------------------------------------
 -- B-tree indexes (equality / range filters)

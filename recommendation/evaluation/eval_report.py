@@ -62,18 +62,22 @@ def print_summary(query_results, filter_results):
         cfg = METRIC_THRESHOLDS[attr]
         if cfg["direction"] == "high":
             verdict = "PASS" if score >= cfg["threshold"] else "FAIL"
-            print(f"  {label:<28} {score:.3f}  [{verdict} >= {cfg['threshold']}]")
+            print(
+                f"  {label:<28} {score:.3f}  [{verdict} >= {cfg['threshold']}]")
         elif cfg["direction"] == "low":
             verdict = "PASS" if score <= cfg["threshold"] else "FAIL"
-            print(f"  {label:<28} {score:.3f}  [{verdict} <= {cfg['threshold']}]")
+            print(
+                f"  {label:<28} {score:.3f}  [{verdict} <= {cfg['threshold']}]")
         else:
             print(f"  {label:<28} {score:.3f}")
 
     gt = [r for r in query_results if r.precision_at_k is not None]
     if gt:
         print(f"\n── Ground Truth Metrics  (n={len(gt)}) ──")
-        print(f"  precision@{TOP_K}                    {_avg([r.precision_at_k for r in gt]):.3f}")
-        print(f"  recall@{TOP_K}                       {_avg([r.recall_at_k for r in gt]):.3f}")
+        print(
+            f"  precision@{TOP_K}                    {_avg([r.precision_at_k for r in gt]):.3f}")
+        print(
+            f"  recall@{TOP_K}                       {_avg([r.recall_at_k for r in gt]):.3f}")
     else:
         print(f"\n── Ground Truth Metrics ──")
         print("  (no queries with expected_results — skipped)")
@@ -88,7 +92,8 @@ def print_summary(query_results, filter_results):
 
     if filter_results:
         n_pass = sum(1 for r in filter_results if r.passed)
-        print(f"\n── Filter Correctness  ({n_pass}/{len(filter_results)} passed) ──")
+        print(
+            f"\n── Filter Correctness  ({n_pass}/{len(filter_results)} passed) ──")
         for r in filter_results:
             if r.passed:
                 status = "PASS"
@@ -123,8 +128,16 @@ def dump_results(query_results, filter_results):
             },
             "precision_at_k": r.precision_at_k,
             "recall_at_k": r.recall_at_k,
+            "top_k": [
+                {
+                    "id": item["id"],
+                    "rrf_score": item["rrf_score"]
+                }
+                for item in r.top_k
+            ],
             "top_k_ids": r.top_k_ids,
             "top_k_reasoning": r.top_k_reasoning,
+
         }
 
     def serialise_filter(r):

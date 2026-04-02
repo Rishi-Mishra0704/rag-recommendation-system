@@ -58,7 +58,7 @@ class QueryEvalResult:
 
     def __init__(self, business_id, business_name, industry, category,
                  trade_type, latency_s, heuristic, precision_at_k, recall_at_k,
-                 top_k_ids, top_k_reasoning):
+                 top_k_ids, top_k_reasoning, top_k=None):
         self.business_id = business_id
         self.business_name = business_name
         self.industry = industry
@@ -70,6 +70,7 @@ class QueryEvalResult:
         self.recall_at_k = recall_at_k
         self.top_k_ids = top_k_ids or []
         self.top_k_reasoning = top_k_reasoning or []
+        self.top_k = top_k or []
 
 
 @dataclass
@@ -221,6 +222,7 @@ def run_eval(eval_inputs):
             recall_at_k=rec,
             top_k_ids=top_k_ids,
             top_k_reasoning=top_k_reasoning,
+            top_k=matches[:TOP_K],
         ))
 
     return results

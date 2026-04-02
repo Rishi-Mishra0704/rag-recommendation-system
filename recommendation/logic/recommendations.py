@@ -19,7 +19,7 @@ import requests
 
 from recommendation.constants.constants import OLLAMA_GENERATE_URL, LLM_MODEL
 from recommendation.common import connect_db, get_embedding
-
+from recommendation.logic.search import vector_search, bm25_search, rrf_merge
 
 # ---------------------------------------------------------------------------
 # Database
@@ -87,53 +87,6 @@ Business Profile:
 Write a 3-4 sentence description of the ideal partner for this business. Focus on what industry they should be in, what role they should play (buyer, seller, supplier, etc.), what trade regions they should operate in, and what capabilities they should have. Be specific and practical."""
 
 
-# ---------------------------------------------------------------------------
-# Vector search
-# ---------------------------------------------------------------------------
-
-def vector_search(
-    cursor,
-    query_embedding: list[float],
-    source_id: str,
-    top_k: int = 5,
-    trade_type: str = None,
-    category: str = None,
-    roles: list = None,
-) -> list[dict]:
-    """
-    Cosine similarity search with optional metadata filters.
-    Passing None for a filter skips it.
-    """
-    cursor.execute(
-        """
-        SELECT id, name, industry, sub_industry, category, trade_type,
-               roles, location, trade_regions, tags, description, partner_goals,
-               1 - (profile_embedding <=> %s::vector) AS similarity
-        FROM businesses
-        WHERE id != %s
-          AND (%s IS NULL OR trade_type = %s)
-          AND (%s IS NULL OR category = %s)
-          AND (%s IS NULL OR roles && %s)
-        ORDER BY profile_embedding <=> %s::vector
-        LIMIT %s
-        """,
-        (
-            query_embedding,
-            source_id,
-            trade_type, trade_type,
-            category, category,
-            roles, roles,
-            query_embedding,
-            top_k,
-        ),
-    )
-
-    columns = [
-        "id", "name", "industry", "sub_industry", "category", "trade_type",
-        "roles", "location", "trade_regions", "tags", "description",
-        "partner_goals", "similarity",
-    ]
-    return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
 
 # ---------------------------------------------------------------------------
@@ -201,11 +154,20 @@ def recommend(
         query_embedding = get_embedding(ideal_partner_text)
 
         # 4. Vector search with optional filters
-        matches = vector_search(
+        vector_matches = vector_search(
             cursor, query_embedding, business_id,
-            top_k=top_k, trade_type=trade_type,
-            category=category, roles=roles,
+            trade_type=trade_type,
+            category=category, roles=roles, top_k = 20
         )
+
+        bm25_matches = bm25_search(
+            cursor, ideal_partner_text, business_id,
+            trade_type=trade_type,
+            category=category, roles=roles, top_k = 20
+        )
+
+        # Merge results (simple RRF)
+        matches = rrf_merge(vector_matches, bm25_matches, top_k=top_k)
 
         # 5. Explain matches
         if explain and matches:
@@ -216,7 +178,7 @@ def recommend(
             "ideal_partner_description": ideal_partner_text,
             "recommendations": matches,
         }
-
+    
     finally:
         cursor.close()
         if _own_conn:
