@@ -1,67 +1,103 @@
 # B2B Partnership Recommendation Engine
 
-A RAG-based system that matches businesses with strategic partners. Given a business profile, it uses an LLM to reason about what an ideal partner looks like, embeds that reasoning, runs a cosine similarity search over a pgvector index, then uses the LLM again to explain each match.
+A RAG-style recommendation system for matching businesses with strategic partners. Given a business profile, the system asks an LLM to describe the ideal partner, then runs hybrid retrieval with semantic vector search and lexical BM25-style full-text search, fuses both ranked lists with Reciprocal Rank Fusion (RRF), and optionally uses the LLM again to explain why each match is a fit.
 
-All inference runs locally via Ollama — no external API calls.
+All inference runs locally through Ollama.
 
 ---
 
 ## Architecture
 
-```
-Business Profile
-      │
-      ▼
- llama3.1:8b
- reasons about ideal partner characteristics
-      │
-      ▼
- qwen3-embedding (4096-dim)
- embeds the LLM's partner description
-      │
-      ▼
- pgvector HNSW cosine search
- + hard metadata filters (trade_type, category, roles)
-      │
-      ▼
- llama3.1:8b
- explains why each match is a good fit
-      │
-      ▼
- Ranked matches with reasoning
+```text
+Business profile
+      |
+      v
+llama3.1:8b
+generates an ideal-partner description
+      |
+      +------------------------------+
+      |                              |
+      v                              v
+qwen3-embedding                 PostgreSQL full-text query
+embeds query text               from the same ideal-partner text
+      |                              |
+      v                              v
+pgvector cosine search          BM25-like ranking with ts_rank
+      |                              |
+      +--------------+---------------+
+                     |
+                     v
+      Reciprocal Rank Fusion (RRF)
+                     |
+                     v
+     Optional LLM explanations per match
+                     |
+                     v
+          Ranked partner recommendations
 ```
 
-The LLM does not embed raw profiles directly. Each business profile is stored as a composite text block (`description + industry + roles + tags + trade_regions + partner_goals`), embedded at ingestion time. At query time, the LLM reasons about what an ideal partner would look like — that reasoning is what gets embedded and searched. This separates "what this business is" from "what it needs."
+The retrieval query is not the raw source business profile. During recommendation, the LLM first rewrites the source business into a short description of the ideal partner. That generated text is used in both retrieval branches:
 
-**Stack:** Python 3.11, PostgreSQL + pgvector, Ollama
+- Vector search over `profile_embedding`
+- Full-text search over a generated `search_text` `tsvector`
+
+Each branch applies the same hard filters when provided, and the two ranked lists are merged with RRF (`k=60`). In the current implementation, each branch fetches up to 20 candidates before fusion.
+
+---
+
+## How Profiles Are Represented
+
+At ingestion time, each business is converted into a composite text block and embedded once. The text block is built from:
+
+- `description`
+- `industry`
+- `sub_industry`
+- `roles`
+- `tags`
+- `trade_regions`
+- `partner_goals`
+
+This keeps the stored representation focused on business identity and context, while query-time retrieval is driven by the LLM's description of partner intent.
+
+---
+
+## Stack
+
+- Python 3.11
+- PostgreSQL + pgvector
+- PostgreSQL full-text search (`tsvector` + `ts_rank`)
+- Ollama
 
 ---
 
 ## Project Structure
 
-```
+```text
 recommendation/
-  common.py                 shared connect_db() and get_embedding()
+  common.py                 shared DB connection and embedding helper
   constants/
-    constants.py            all config: DB, Ollama URLs, model names
+    constants.py            config, model names, SQL constants
   logic/
-    embed_service.py        build text blocks, embed profiles, insert into DB
-    recommendations.py      RAG recommendation engine (the full 5-step flow)
+    embed_service.py        build profile text blocks, embed, insert into DB
+    recommendations.py      end-to-end recommendation orchestration
+    search.py               vector search, BM25 search, RRF merge
   data_gen/
-    transform.py            CSV → Business profile pipeline (orchestrator)
+    transform.py            CSV -> business profile pipeline
     llm_gen.py              LLM prompt construction and text generation
-    mappings.py             industry tag map, country → trade region map
-    schemas.py              Pydantic Business model, enums, sub-industry map
-    validate.py             validate profiles.json against the Business schema
+    mappings.py             industry and trade-region mapping helpers
+    schemas.py              Pydantic business schema and enums
+    validate.py             validate generated profiles
   evaluation/
-    eval.py                 evaluation orchestrator: run_eval, filter tests
-    eval_scoring.py         heuristic scorers, precision@k, recall@k
-    eval_report.py          print_summary, dump_results, thresholds
+    eval.py                 evaluation runner and filter tests
+    eval_scoring.py         heuristic metrics and precision/recall helpers
+    eval_report.py          summary printer and JSON report writer
 sql/
-  schema.sql                businesses table, HNSW vector index, GIN/B-tree indexes
+  schema.sql                businesses table and supporting indexes
+api/
+  main.go                   placeholder for a future API layer
 data/
-  companies_sorted.csv      input dataset (not in repo — see Setup)
-  profiles.json             generated profiles (not in repo — generated locally)
+  profiles.json             generated business profiles
+  profiles_validated.json   validated business profiles
 ```
 
 ---
@@ -70,7 +106,7 @@ data/
 
 - Python 3.11+
 - Docker
-- [Ollama](https://ollama.com) running locally with both models pulled:
+- [Ollama](https://ollama.com) running locally with both models pulled
 
 ```bash
 ollama pull llama3.1:8b
@@ -83,10 +119,10 @@ ollama pull qwen3-embedding
 
 | Role | Model |
 |---|---|
-| Reasoning + explanations | `llama3.1:8b` |
+| Query generation + match explanations | `llama3.1:8b` |
 | Embeddings | `qwen3-embedding` (4096-dim) |
 
-Both are heavy models chosen for quality during development. For faster iteration, you can swap in a smaller LLM (e.g. `llama3.2:3b`) or a lower-dimension embedding model. If you change the embedding model, update the vector dimension in `sql/schema.sql` and re-run `embed_service.py` to re-embed all profiles.
+If you change the embedding model, update the vector dimension in `sql/schema.sql` and re-run the embedding pipeline so all stored business vectors are regenerated.
 
 ---
 
@@ -114,7 +150,7 @@ docker run -d \
   pgvector/pgvector:pg16
 ```
 
-**3. Run the schema**
+**3. Apply the schema**
 
 ```bash
 psql -h localhost -p 5433 -U raguser -d rag_recommendation -f sql/schema.sql
@@ -122,9 +158,9 @@ psql -h localhost -p 5433 -U raguser -d rag_recommendation -f sql/schema.sql
 
 **4. Get the dataset**
 
-Download the [People Data Labs Company Dataset](https://www.kaggle.com/datasets/peopledatalabssf/free-7-million-company-dataset) from Kaggle and place it at:
+Download the [People Data Labs Company Dataset](https://www.kaggle.com/datasets/peopledatalabssf/free-7-million-company-dataset) and place it at:
 
-```
+```text
 data/companies_sorted.csv
 ```
 
@@ -132,7 +168,7 @@ data/companies_sorted.csv
 
 ## Usage
 
-Run each step in order from the repo root.
+Run each step from the repo root.
 
 **Generate business profiles from the CSV**
 
@@ -151,19 +187,19 @@ python -m recommendation.data_gen.validate \
   --output data/profiles_validated.json
 ```
 
-**Embed profiles and insert into the database**
+**Embed profiles and insert them into PostgreSQL**
 
 ```bash
 python -m recommendation.logic.embed_service
 ```
 
-**Get recommendations for a business**
+**Generate recommendations for a business**
 
 ```bash
 python -m recommendation.logic.recommendations <business_id>
 ```
 
-Optional filters: `--trade_type domestic|international|both`, `--category manufacturer|distributor|...`
+The current CLI accepts a business ID and returns fused hybrid-search recommendations. Filtering by `trade_type`, `category`, and `roles` is supported inside `recommend(...)` programmatically, even though those flags are not yet exposed on the command line.
 
 **Run evaluation**
 
@@ -171,31 +207,27 @@ Optional filters: `--trade_type domestic|international|both`, `--category manufa
 python -m recommendation.evaluation.eval
 ```
 
-Results are printed to stdout and written to `recommendation/evaluation/eval_results.json`.
+This runs recommendation-quality heuristics, simple precision/recall where ground truth is available, and filter-correctness checks. Results are printed to stdout and written to `recommendation/evaluation/eval_results.json`.
 
 ---
 
-## Eval Results
+## Retrieval Details
 
-Heuristic metrics averaged over 20 queries (top-5 results each):
+- `vector_search(...)` ranks businesses by cosine distance on `profile_embedding`
+- `bm25_search(...)` ranks businesses with PostgreSQL full-text search using `ts_rank`
+- `rrf_merge(...)` combines both lists with Reciprocal Rank Fusion
+- Source businesses are excluded from their own result set
+- Optional hard filters currently supported in the search layer:
+  - `trade_type`
+  - `category`
+  - `roles` overlap
 
-| Metric | Score | Threshold | Result |
-|---|---|---|---|
-| Industry match rate | 0.84 | ≥ 0.70 | PASS |
-| Role compatibility | 0.91 | ≥ 0.80 | PASS |
-| Trade type compatibility | 0.76 | ≥ 0.70 | PASS |
-| Category match rate | 0.17 | ≤ 0.30 | PASS |
-| Trade region overlap | — | neutral | — |
-
-Filter correctness: **4/4 passing** (`trade_type=domestic`, `trade_type=international`, `category=manufacturer`, `category=distributor`).
-
-Category match is intentionally low — same-category matches indicate the system is finding complementary partners (e.g. a supplier paired with a distributor), not clones.
+The database schema also defines a generated `search_text` column so the same stored business record can participate in both semantic and lexical retrieval.
 
 ---
 
 ## Roadmap
 
-- **Hybrid search** — BM25 + vector with RRF fusion
 - **Cross-encoder reranking** — re-score top-N candidates with a dedicated reranker
 - **Agentic loop** — runtime decision-making over search strategy and filter selection
 - **Go API layer** — Echo-based HTTP API wrapping the recommendation engine
