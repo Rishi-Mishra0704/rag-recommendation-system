@@ -19,7 +19,7 @@ import requests
 
 from recommendation.constants.constants import OLLAMA_GENERATE_URL, LLM_MODEL
 from recommendation.common import connect_db, get_embedding
-from recommendation.logic.search import vector_search, bm25_search, rrf_merge
+from recommendation.logic.search import rerank, vector_search, bm25_search, rrf_merge
 
 # ---------------------------------------------------------------------------
 # Database
@@ -167,7 +167,10 @@ def recommend(
         )
 
         # Merge results (simple RRF)
-        matches = rrf_merge(vector_matches, bm25_matches, top_k=top_k)
+        merged = rrf_merge(vector_matches, bm25_matches, top_k=15)
+
+        # 6. Cross-encoder rerank — final top_k
+        matches = rerank(ideal_partner_text, merged, top_k=top_k)
 
         # 5. Explain matches
         if explain and matches:

@@ -1,3 +1,10 @@
+from sentence_transformers import CrossEncoder
+
+
+
+# Load once at module level
+reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +107,10 @@ def bm25_search(
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
 
+# ---------------------------------------------------------------------------
+# RRF merging
+# ---------------------------------------------------------------------------
+
 def rrf_merge(
     vector_results: list[dict],
     bm25_results: list[dict],
@@ -152,3 +163,44 @@ def rrf_merge(
         merged_results.append(item)
 
     return merged_results
+
+
+
+
+# ---------------------------------------------------------------------------
+# Reranking with cross-encoder
+# ---------------------------------------------------------------------------
+
+def _build_candidate_text(candidate: dict) -> str:
+    """Combine candidate fields into a single text block for reranking."""
+    roles = ", ".join(candidate.get("roles", []))
+    tags = ", ".join(candidate.get("tags", []))
+    trade_regions = ", ".join(candidate.get("trade_regions", []))
+
+    return (
+        f"{candidate.get('description', '')} "
+        f"Industry: {candidate.get('industry', '')} "
+        f"Sub-industry: {candidate.get('sub_industry', '')} "
+        f"Roles: {roles} "
+        f"Tags: {tags} "
+        f"Trade regions: {trade_regions} "
+        f"Partner goals: {candidate.get('partner_goals', '')}"
+    )
+
+
+def rerank(query_text: str, candidates: list[dict], top_k: int = 5) -> list[dict]:
+    """
+    Rerank candidates using a cross-encoder.
+    Takes query + candidate pairs, scores them together, returns top_k.
+    """
+    if not candidates:
+        return []
+
+    pairs = [(query_text, _build_candidate_text(c)) for c in candidates]
+    scores = reranker.predict(pairs)
+
+    for i, candidate in enumerate(candidates):
+        candidate["rerank_score"] = float(scores[i])
+
+    ranked = sorted(candidates, key=lambda x: x["rerank_score"], reverse=True)
+    return ranked[:top_k]
