@@ -1,6 +1,6 @@
 # B2B Partnership Recommendation Engine
 
-A RAG-style recommendation system for matching businesses with strategic partners. Given a business profile, the system asks an LLM to describe the ideal partner, then runs hybrid retrieval with semantic vector search and lexical BM25-style full-text search, fuses both ranked lists with Reciprocal Rank Fusion (RRF), and optionally uses the LLM again to explain why each match is a fit.
+A RAG-style recommendation system for matching businesses with strategic partners. Given a business profile, the system asks an LLM to describe the ideal partner, then runs hybrid retrieval with semantic vector search and lexical BM25-style full-text search, fuses both ranked lists with Reciprocal Rank Fusion (RRF), reranks the fused candidates with a cross-encoder, and optionally uses the LLM again to explain why each match is a fit.
 
 All inference runs locally through Ollama.
 
@@ -30,6 +30,9 @@ pgvector cosine search          BM25-like ranking with ts_rank
       Reciprocal Rank Fusion (RRF)
                      |
                      v
+        Cross-encoder reranking
+                     |
+                     v
      Optional LLM explanations per match
                      |
                      v
@@ -41,7 +44,7 @@ The retrieval query is not the raw source business profile. During recommendatio
 - Vector search over `profile_embedding`
 - Full-text search over a generated `search_text` `tsvector`
 
-Each branch applies the same hard filters when provided, and the two ranked lists are merged with RRF (`k=60`). In the current implementation, each branch fetches up to 20 candidates before fusion.
+Each branch applies the same hard filters when provided, and the two ranked lists are merged with RRF (`k=60`). In the current implementation, each branch fetches up to 20 candidates, the fused list is trimmed to 15, and a cross-encoder reranks those candidates before the final `top_k` is returned.
 
 ---
 
@@ -66,6 +69,7 @@ This keeps the stored representation focused on business identity and context, w
 - Python 3.11
 - PostgreSQL + pgvector
 - PostgreSQL full-text search (`tsvector` + `ts_rank`)
+- Sentence Transformers cross-encoder reranker
 - Ollama
 
 ---
@@ -80,7 +84,7 @@ recommendation/
   logic/
     embed_service.py        build profile text blocks, embed, insert into DB
     recommendations.py      end-to-end recommendation orchestration
-    search.py               vector search, BM25 search, RRF merge
+    search.py               vector search, BM25 search, RRF merge, reranking
   data_gen/
     transform.py            CSV -> business profile pipeline
     llm_gen.py              LLM prompt construction and text generation
@@ -121,6 +125,7 @@ ollama pull qwen3-embedding
 |---|---|
 | Query generation + match explanations | `llama3.1:8b` |
 | Embeddings | `qwen3-embedding` (4096-dim) |
+| Final reranking | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
 
 If you change the embedding model, update the vector dimension in `sql/schema.sql` and re-run the embedding pipeline so all stored business vectors are regenerated.
 
@@ -199,7 +204,7 @@ python -m recommendation.logic.embed_service
 python -m recommendation.logic.recommendations <business_id>
 ```
 
-The current CLI accepts a business ID and returns fused hybrid-search recommendations. Filtering by `trade_type`, `category`, and `roles` is supported inside `recommend(...)` programmatically, even though those flags are not yet exposed on the command line.
+The current CLI accepts a business ID and returns reranked hybrid-search recommendations. Filtering by `trade_type`, `category`, and `roles` is supported inside `recommend(...)` programmatically, even though those flags are not yet exposed on the command line.
 
 **Run evaluation**
 
@@ -216,6 +221,7 @@ This runs recommendation-quality heuristics, simple precision/recall where groun
 - `vector_search(...)` ranks businesses by cosine distance on `profile_embedding`
 - `bm25_search(...)` ranks businesses with PostgreSQL full-text search using `ts_rank`
 - `rrf_merge(...)` combines both lists with Reciprocal Rank Fusion
+- `rerank(...)` reranks the fused candidates with `cross-encoder/ms-marco-MiniLM-L-6-v2`
 - Source businesses are excluded from their own result set
 - Optional hard filters currently supported in the search layer:
   - `trade_type`
@@ -226,9 +232,12 @@ The database schema also defines a generated `search_text` column so the same st
 
 ---
 
-## Roadmap
+## Project Status
 
-- **Cross-encoder reranking** — re-score top-N candidates with a dedicated reranker
-- **Agentic loop** — runtime decision-making over search strategy and filter selection
-- **Go API layer** — Echo-based HTTP API wrapping the recommendation engine
-- **Latency optimization** — profile the end-to-end pipeline and cut inference time
+This project is being paused at its current scope. The implemented pipeline now includes:
+
+- LLM-generated ideal partner descriptions
+- Hybrid retrieval with pgvector + PostgreSQL full-text search
+- Reciprocal Rank Fusion (RRF)
+- Cross-encoder reranking
+- Optional LLM-generated match explanations
